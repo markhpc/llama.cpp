@@ -597,8 +597,13 @@ class MultiChatUI {
      * @param {string} apiEP
      */
     async handle_user_submit(chatId, apiEP) {
-
+        console.info("Starting handle_user_submit with chatId:", chatId);
         let chat = this.simpleChats[chatId];
+
+        console.info("Before: apiRequestOptions.chat_id =", gMe.apiRequestOptions.chat_id);
+        // Add the chatId to the apiRequestOptions
+        gMe.apiRequestOptions.chat_id = chatId;
+        console.info("After: apiRequestOptions.chat_id =", gMe.apiRequestOptions.chat_id);
 
         // In completion mode, if configured, clear any previous chat history.
         // So if user wants to simulate a multi-chat based completion query,
@@ -619,10 +624,13 @@ class MultiChatUI {
 
         let theUrl = ApiEP.Url(gMe.baseURL, apiEP);
         let theBody = chat.request_jsonstr(apiEP);
+        console.info("Request body:", theBody);
+
 
         this.elInUser.value = "working...";
         this.elInUser.disabled = true;
         console.debug(`DBUG:SimpleChat:MCUI:${chatId}:HandleUserSubmit:${theUrl}:ReqBody:${theBody}`);
+
         let theHeaders = chat.fetch_headers(apiEP);
         let resp = await fetch(theUrl, {
             method: "POST",
@@ -749,6 +757,7 @@ class Me {
             "max_tokens": 1024,
             "n_predict": 1024,
             "cache_prompt": false,
+            "chat_id": "",
             //"frequency_penalty": 1.2,
             //"presence_penalty": 1.2,
         };
