@@ -62,6 +62,15 @@ add_library(${TARGET} STATIC
     common.h
     console.cpp
     console.h
+    inference-hooks/inference_hook.h
+    inference-hooks/inference_hook.cpp
+    inference-hooks/inference_hook_factory.h
+    inference-hooks/inference_hook_factory.cpp
+    inference-hooks/inference_hook_composite.h
+    inference-hooks/inference_hook_composite.cpp
+    inference-hooks/governance/governance_hook.h
+    inference-hooks/governance/governance_hook.cpp
+    inference-hooks/governance/governance_hook_factory.cpp
     json-schema-to-grammar.cpp
     json.hpp
     llguidance.cpp
