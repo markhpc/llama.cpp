@@ -5,6 +5,7 @@
 #include "sampling.h"
 #include "llama.h"
 #include "chat.h"
+#include "inference-hooks/inference_hook_factory.h"
 
 #include <cstdio>
 #include <cstring>
@@ -276,14 +277,20 @@ int main(int argc, char ** argv) {
         return formatted;
     };
 
+    // inference hook
+     auto& hook = get_or_create_inference_hook("default");
+
     std::string prompt;
     {
+        std::string injected_prompt = hook.format_injection_prompt();
         if (params.conversation_mode && params.enable_chat_template) {
             if (!params.system_prompt.empty()) {
                 // format the system prompt (will use template default if empty)
                 chat_add_and_format("system", params.system_prompt);
             }
 
+            // We'll add this back into the system prompt in llama-chat.cpp
+            chat_add_and_format("system", injected_prompt);
             if (!params.prompt.empty()) {
                 // format and append the user prompt
                 chat_add_and_format("user", params.prompt);
@@ -300,7 +307,7 @@ int main(int argc, char ** argv) {
             }
         } else {
             // otherwise use the prompt as is
-            prompt = params.prompt;
+            prompt = injected_prompt + "\n\n" + params.prompt;
         }
 
         if (params.interactive_first || !prompt.empty() || session_tokens.empty()) {
@@ -909,6 +916,8 @@ int main(int argc, char ** argv) {
                         output_tokens.push_back(token);
                         output_ss << common_token_to_piece(ctx, token);
                     }
+                    // inject hook command parsing
+                    output_ss << hook.handle_text_command(output_ss.str());
 
                     // reset assistant message
                     assistant_ss.str("");
