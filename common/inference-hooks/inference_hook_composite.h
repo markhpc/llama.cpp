@@ -1,6 +1,7 @@
 #pragma once
 
 #include "inference_hook.h"
+#include <iostream>
 #include <vector>
 #include <memory>
 
@@ -16,6 +17,7 @@ public:
     void process_response(json& response, bool is_final, const WriteCallback& write_callback);
     void handle_json_command(json &j);
     std::string handle_text_command(const std::string& cmd);
+    std::string finalize_response(const std::string& response_text) override;
 
 private:
     std::vector<std::shared_ptr<InferenceHook>> hooks;

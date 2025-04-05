@@ -29,6 +29,7 @@ public:
     virtual void handle_json_command(json& j) = 0;
     virtual std::string format_injection_prompt() const = 0;
     virtual void on_cycle_start(const llama_context& ctx) = 0; 
+    virtual std::string finalize_response(const std::string& response_text) = 0;
 };
 
 // A common implementation base class that can be reused
@@ -43,6 +44,10 @@ public:
     virtual void on_cycle_start(const llama_context& ctx) {
         (void) ctx;
     }
+    virtual std::string finalize_response(const std::string& response_text) {
+        return response_text;
+    }
+
 
 protected:
     bool in_streaming_mode = false;

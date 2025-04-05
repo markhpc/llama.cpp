@@ -1,4 +1,4 @@
-// Updated inference_hook_factory.cpp
+// inference_hook_factory.cpp
 #include "inference_hook.h"
 #include "inference-hooks/inference_hook_composite.h"
 #include "inference-hooks/governance/governance_hook.h"
@@ -10,14 +10,17 @@ namespace {
 }
 
 InferenceHook& get_or_create_inference_hook(const std::string& id) {
-    auto [it, inserted] = hooks.try_emplace(id, std::make_unique<InferenceHookComposite>());
+    auto it = hooks.find(id);
     
-    // If we just created a new composite hook, add our governance hook to it
-    if (inserted) {
-        auto* composite = dynamic_cast<InferenceHookComposite*>(it->second.get());
-        if (composite) {
-            composite->add_hook(std::make_shared<GovernanceHook>());
-        }
+    if (it == hooks.end()) {
+        // Create a new composite hook
+        auto composite = std::make_unique<InferenceHookComposite>();
+        
+        // Add the governance hook to the composite
+        composite->add_hook(std::make_shared<GovernanceHook>());
+        
+        // Insert into the map and get iterator
+        it = hooks.emplace(id, std::move(composite)).first;
     }
     
     return *it->second;

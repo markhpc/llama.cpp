@@ -12,6 +12,9 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
 
         // On final chunk, check if we need to execute hook commands
         if (is_final) {
+            // Allow derived classes to modify the output
+            accumulated_content = finalize_response(accumulated_content);
+
             // Extract hook commands from the accumulated content
             std::regex json_pattern(R"(\{[^{}]*"hook_command"[^{}]*\})");
             std::smatch match;
@@ -27,7 +30,7 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
                     nlohmann::ordered_json hook_chunk = {
                         {"id", "hook_response"},
                         {"object", "chat.completion.chunk"},
-                        {"created", (int)time(NULL)},
+                        {"created", static_cast<int>(time(nullptr))},
                         {"model", "hook_system"},
                         {"choices", {{
                             {"index", 0},
@@ -41,18 +44,30 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
                     write_callback(chunk_str.c_str(), chunk_str.size());
                 }
 
-                // Signal the end of the stream
-                const std::string done_msg = "data: [DONE]\n\n";
-                write_callback(done_msg.c_str(), done_msg.size());
             } else {
-                // No hook command detected, just end the stream normally
-                const std::string done_msg = "data: [DONE]\n\n";
-                write_callback(done_msg.c_str(), done_msg.size());
+                // No hook command: emit the finalized output directly
+                if (!accumulated_content.empty()) {
+                    nlohmann::json final_chunk = {
+                        {"choices", {{
+                            {"delta", {
+                                {"content", accumulated_content}
+                            }}
+                        }}}
+                    };
+
+                    std::string chunk_str = "data: " + final_chunk.dump() + "\n\n";
+                    write_callback(chunk_str.c_str(), chunk_str.size());
+                }
             }
+
+            // Always signal the end of the stream
+            const std::string done_msg = "data: [DONE]\n\n";
+            write_callback(done_msg.c_str(), done_msg.size());
 
             // Reset streaming state
             reset_streaming();
         }
+
     } else {
         // For non-streaming responses, process directly
         process_regular_response(response);
@@ -304,6 +319,9 @@ void InferenceHookCommon::process_regular_response(json& j) {
         log_debug("process_regular_response: No model output found to process");
         return;
     }
+
+    // Allow derived classes to modify the output
+    model_output = finalize_response(model_output);
 
     // Process and append any hook responses
     std::string hook_response = handle_text_command(model_output);

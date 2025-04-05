@@ -56,3 +56,13 @@ std::string InferenceHookComposite::handle_text_command(const std::string &cmd) 
 
     return combined.str();
 }
+
+std::string InferenceHookComposite::finalize_response(const std::string& response_text) {
+    std::cout << "[CompositeHook] finalize_response() chaining to " << hooks.size() << " sub-hooks\n";
+    std::string result = response_text;
+    for (const auto &hook : hooks) {
+        result = hook->finalize_response(result);  // Allow each hook to modify it
+    }
+
+    return result;
+}
