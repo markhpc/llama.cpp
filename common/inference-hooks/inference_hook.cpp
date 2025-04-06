@@ -10,7 +10,7 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
         // Process the chunk normally
         process_streaming_chunk(response);
         
-        // On final chunk, check if we need to execute hook commands
+        // On final chunk, check if we need to execute hook commands and add feedback
         if (is_final) {
             // Allow derived classes to modify the output
             std::string original_content = accumulated_content;
@@ -22,6 +22,8 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
             // Extract hook commands from the accumulated content
             std::regex json_pattern(R"(\{[^{}]*"hook_command"[^{}]*\})");
             std::smatch match;
+            bool hook_command_executed = false;
+            
             if (std::regex_search(accumulated_content, match, json_pattern)) {
                 std::string json_str = match.str();
                 // Execute the hook command
@@ -42,6 +44,7 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
                     // Format and send the response
                     std::string chunk_str = "data: " + hook_chunk.dump() + "\n\n";
                     write_callback(chunk_str.c_str(), chunk_str.size());
+                    hook_command_executed = true;
                 }
             } 
             // Only send modified content if it was actually modified by the governance hook
@@ -58,6 +61,29 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
                 write_callback(chunk_str.c_str(), chunk_str.size());
             }
             
+            // Check for feedback after processing the hook command and content modification
+            if (has_feedback()) {
+                std::string feedback = get_feedback();
+                if (!feedback.empty()) {
+                    // Create a special feedback chunk
+                    nlohmann::ordered_json feedback_chunk = {
+                        {"id", "governance_feedback"},
+                        {"object", "chat.completion.chunk"},
+                        {"created", static_cast<int>(time(nullptr))},
+                        {"model", "governance_system"},
+                        {"choices", {{
+                            {"index", 0},
+                            {"delta", {{"content", "\n\n" + feedback}}},
+                            {"finish_reason", nullptr}
+                        }}}
+                    };
+                    
+                    // Format and send the feedback
+                    std::string chunk_str = "data: " + feedback_chunk.dump() + "\n\n";
+                    write_callback(chunk_str.c_str(), chunk_str.size());
+                }
+            }
+            
             // Always signal the end of the stream
             const std::string done_msg = "data: [DONE]\n\n";
             write_callback(done_msg.c_str(), done_msg.size());
@@ -68,6 +94,41 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
     } else {
         // For non-streaming responses, process directly
         process_regular_response(response);
+        
+        // Check for feedback after processing the response
+        if (has_feedback()) {
+            std::string feedback = get_feedback();
+            
+            // For non-streaming responses, we need to append the feedback to the response
+            if (!feedback.empty()) {
+                // Determine where to insert the feedback based on response structure
+                if (response.contains("choices") && response["choices"].is_array() && 
+                    !response["choices"].empty()) {
+                    
+                    auto& first_choice = response["choices"][0];
+                    if (first_choice.contains("message") && first_choice["message"].contains("content")) {
+                        // For OpenAI-style responses
+                        std::string current_content = first_choice["message"]["content"];
+                        first_choice["message"]["content"] = current_content + "\n\n" + feedback;
+                    } else if (first_choice.contains("text")) {
+                        // For some API formats
+                        std::string current_content = first_choice["text"];
+                        first_choice["text"] = current_content + "\n\n" + feedback;
+                    }
+                } else if (response.contains("content")) {
+                    // Direct content field
+                    std::string current_content = response["content"];
+                    response["content"] = current_content + "\n\n" + feedback;
+                } else if (response.contains("text")) {
+                    // Legacy format
+                    std::string current_content = response["text"];
+                    response["text"] = current_content + "\n\n" + feedback;
+                }
+                
+                // Log that feedback was added
+                log_debug("Added governance feedback to non-streaming response");
+            }
+        }
     }
 }
 

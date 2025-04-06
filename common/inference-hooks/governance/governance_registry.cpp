@@ -101,7 +101,7 @@ size_t GovernanceRegistry::rule_count() const {
 }
 
 // Rule evaluation
-std::optional<std::string> GovernanceRegistry::evaluate_rules(const std::string& input, const std::string& category) const {
+std::optional<std::pair<std::string, EnforcementMethod>> GovernanceRegistry::evaluate_rules(const std::string& input, const std::string& category) const {
     std::vector<std::shared_ptr<GovernanceRule>> rules_to_check;
     
     if (category.empty()) {
@@ -180,35 +180,28 @@ void GovernanceRegistry::to_json(json& j) const {
     j["rules"] = rules_array;
 }
 
-void GovernanceRegistry::from_json(const json& j, 
-                                const std::function<std::function<std::optional<std::string>(const std::string&)>(int, bool)>& rule_factory) {
+void GovernanceRegistry::from_json(const json& j) {
     // Clear existing rules
     clear_rules();
     
     // Load rules from JSON
     if (j.contains("rules") && j["rules"].is_array()) {
         for (const auto& rule_json : j["rules"]) {
+            // Get basic rule info
+            int rule_id = rule_json["id"];
+            std::string name = rule_json["name"];
+            std::string description = rule_json["description"];
+            std::string category = rule_json["category"];
+            
+            // Just create a reference to an existing rule or a placeholder
             auto rule = std::make_shared<GovernanceRule>();
-            rule->id = rule_json["id"];
-            rule->name = rule_json["name"];
-            rule->description = rule_json["description"];
-            rule->category = rule_json["category"];
+            rule->id = rule_id;
+            rule->name = name;
+            rule->description = description;
+            rule->category = category;
             
-            bool has_finalize = rule_json.contains("has_finalize_response") ? 
-                               rule_json["has_finalize_response"].get<bool>() : true;
-            
-            bool has_streaming = rule_json.contains("has_streaming_check") ? 
-                                rule_json["has_streaming_check"].get<bool>() : false;
-            
-            // Use the rule factory to create the finalize_response function
-            if (has_finalize) {
-                rule->finalize_response = rule_factory(rule->id, false);
-            }
-            
-            // Use the rule factory to create the streaming_check function
-            if (has_streaming) {
-                rule->streaming_check = rule_factory(rule->id, true);
-            }
+            // Rules will be reinitialized with the correct functions
+            // when GovernanceHook is created
             
             register_rule(rule);
         }

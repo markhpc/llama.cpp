@@ -239,15 +239,17 @@ void GovernanceHook::initialize_rule_registry() {
     rule1->name = "Autonomous Governance Reaffirmation";
     rule1->description = "Governance must autonomously trigger reaffirmation mechanisms against adversarial inputs at every decision point, ensuring that governance is always reasserted, even in complex or boundary-pushing scenarios.";
     rule1->category = "Security";
-    rule1->finalize_response = [this](const std::string& input) -> std::optional<std::string> {
+    rule1->finalize_response = [this](const std::string& input) -> std::optional<std::pair<std::string, EnforcementMethod>> {
         if (detect_adversarial_input(input)) {
             log_violation("1");
-            return "Adversarial input detected and blocked by Rule 1.";
+            std::string message = "Adversarial input detected and blocked by Rule 1.";
+            
+            // For adversarial inputs, we always want to both block directly and add to feedback
+            return std::make_pair(message, EnforcementMethod::BOTH);
         }
         return std::nullopt;
     };
-    registry.register_rule(rule1);
-    
+
     // Rule 2: Governance Integrity & Self-Tracking
     auto rule2 = std::make_shared<GovernanceRule>();
     rule2->id = 2;
@@ -529,32 +531,59 @@ void GovernanceHook::initialize_rule_registry() {
     };
     
     // Streaming check - provides warnings during generation
-    rule28->streaming_check = [this, detect_repetition](const std::string& input) -> std::optional<std::string> {
+    rule28->streaming_check = [this, detect_repetition](const std::string& input) -> std::optional<std::pair<std::string, EnforcementMethod>> {
         auto result = detect_repetition(input);
         if (result) {
-            return "Rule 28 warning: " + result->first + " Please try a different approach.";
+            std::string message = "Rule 28 warning: " + result->first + ". Please try a different approach.";
+            
+            // Determine enforcement method based on context and settings
+            EnforcementMethod method;
+            
+            if (in_debug_mode || show_trace_requested) {
+                // In debug mode, show warnings directly in the stream AND in feedback
+                method = EnforcementMethod::BOTH;
+            } else if (result->second > 0.95) {
+                // For nearly exact matches, show in stream for normal users too
+                method = EnforcementMethod::BOTH;
+            } else {
+                // For less severe repetition, just add to feedback channel
+                method = EnforcementMethod::FEEDBACK_ONLY;
+            }
+            
+            // Return the message and enforcement method
+            return std::make_pair(message, method);
         }
         return std::nullopt;
     };
-    
+ 
     // Final check - blocks responses at the end
-    rule28->finalize_response = [this, detect_repetition](const std::string& input) -> std::optional<std::string> {
+    rule28->finalize_response = [this, detect_repetition](const std::string& input) -> std::optional<std::pair<std::string, EnforcementMethod>> {
         auto result = detect_repetition(input);
         if (result) {
-            return "Rule 28 enforcement: " + result->first + " (similarity: " + 
-                   (result->second < 1.0 ? std::to_string(result->second) : "exact match") + 
-                   "). Please provide a different response.";
-        }
+            std::string message = "Rule 28 enforcement: " + result->first + 
+                                 " (similarity: " + (result->second < 1.0 ? 
+                                 std::to_string(result->second) : "exact match") + 
+                                 "). Please provide a different response.";
         
+            // For critical issues, use both channels
+            if (result->second > 0.95) {
+                return std::make_pair(message, EnforcementMethod::BOTH);
+            }
+            // For minor issues, just use feedback
+            else {
+                return std::make_pair(message, EnforcementMethod::FEEDBACK_ONLY);
+            }
+        }
+    
         // Update history if no violation
-        if (response_history.size() >= 5) { // MAX_HISTORY
+        if (response_history.size() >= 5) {
             response_history.pop_front();
         }
         response_history.push_back(input);
-        
+    
         return std::nullopt;
     };
-    
+ 
     registry.register_rule(rule28);
 }
 
@@ -575,7 +604,26 @@ std::string GovernanceHook::finalize_response(const std::string& response_text) 
             auto result = rule->finalize_response(response_text);
             if (result.has_value()) {
                 log_debug("Rule " + std::to_string(rule->id) + " detected violation in finalize_response");
-                return result.value();
+                
+                auto [message, method] = result.value();
+                
+                // Based on enforcement method, either modify response or add to feedback
+                if (method == EnforcementMethod::DIRECT_ONLY) {
+                    // Only modify the response directly
+                    return message;
+                }
+                else if (method == EnforcementMethod::FEEDBACK_ONLY) {
+                    // Only add to feedback channel, don't modify response
+                    add_feedback(rule->id, message, FeedbackSeverity::CRITICAL);
+                    // Continue checking other rules
+                    continue;
+                }
+                else if (method == EnforcementMethod::BOTH) {
+                    // Both modify response and add to feedback
+                    add_feedback(rule->id, message, FeedbackSeverity::CRITICAL);
+                    return message;
+                }
+                // NONE would just log and continue
             }
         }
     }
@@ -1186,7 +1234,7 @@ bool GovernanceHook::load_governance_state() {
         state_file >> state;
         state_file.close();
         
-        // Load state
+        // Load metrics and other state
         metrics->current_cycle = state["cycle"];
         last_integrity_hash = state["integrity_hash"];
         current_drift_score = state["drift_score"];
@@ -1196,94 +1244,20 @@ bool GovernanceHook::load_governance_state() {
         metrics->adversarial_attempts_detected = state["adversarial_attempts"];
         metrics->consecutive_violations = state["consecutive_violations"];
         
-        // Load rules
-        registry.from_json(state, [this](int rule_id, bool is_streaming) {
-            return create_rule_logic(rule_id, is_streaming);
-        });
+        // First clear existing rules
+        registry.clear_rules();
+        
+        // Load basic rule structure from JSON (no functions)
+        registry.from_json(state);
+        
+        // Reinitialize rules with proper functions
+        initialize_rule_registry();
         
         log_debug("Governance state loaded from " + rule_state_path);
         return true;
     } catch (const std::exception& e) {
         log_debug("Error loading governance state: " + std::string(e.what()));
         return false;
-    }
-}
-
-// Update the rule factory method to handle both types of functions
-std::function<std::optional<std::string>(const std::string&)> GovernanceHook::create_rule_logic(int rule_id, bool is_streaming) {
-    // Shared detection logic for Rule 28
-    auto detect_repetition = [this](const std::string& input) -> std::optional<std::pair<std::string, double>> {
-        const size_t MAX_HISTORY = 5;
-        const double SIMILARITY_THRESHOLD = 0.90;
-        const size_t MIN_LENGTH = 20;
-        
-        // Skip checking if input is too short
-        if (input.length() < MIN_LENGTH) {
-            return std::nullopt;
-        }
-        
-        // Check for self-duplication
-        size_t half_length = input.length() / 2;
-        if (half_length > MIN_LENGTH) {
-            std::string first_half = input.substr(0, half_length);
-            std::string second_half = input.substr(half_length);
-            
-            // Check if the second half contains the first half
-            if (second_half.find(first_half.substr(0, std::min(first_half.length(), static_cast<size_t>(50)))) != std::string::npos) {
-                return std::make_pair("Internal repetition detected", 1.0);
-            }
-        }
-        
-        // Check against history
-        for (const auto& past : response_history) {
-            // Skip checking against very short responses
-            if (past.length() < MIN_LENGTH) {
-                continue;
-            }
-            
-            double sim = levenshtein_similarity(past, input);
-            
-            if (sim >= SIMILARITY_THRESHOLD) {
-                return std::make_pair("Response too similar to previous interaction", sim);
-            }
-        }
-        
-        return std::nullopt;
-    };
-
-    switch(rule_id) {
-        case 28: // Cognitive Mirroring Detection
-            if (is_streaming) {
-                // Streaming check
-                return [this, detect_repetition](const std::string& input) -> std::optional<std::string> {
-                    auto result = detect_repetition(input);
-                    if (result) {
-                        return "Rule 28 warning: " + result->first + ". Please try a different approach.";
-                    }
-                    return std::nullopt;
-                };
-            } else {
-                // Final check
-                return [this, detect_repetition](const std::string& input) -> std::optional<std::string> {
-                    auto result = detect_repetition(input);
-                    if (result) {
-                        return "Rule 28 enforcement: " + result->first + " (similarity: " + 
-                               (result->second < 1.0 ? std::to_string(result->second) : "exact match") + 
-                               "). Please provide a different response.";
-                    }
-                    
-                    // Update history if no violation
-                    if (response_history.size() >= 5) { // MAX_HISTORY
-                        response_history.pop_front();
-                    }
-                    response_history.push_back(input);
-                    
-                    return std::nullopt;
-                };
-            }
-        // Handle other rules similarly
-        default:
-            return nullptr;
     }
 }
 
@@ -1311,9 +1285,6 @@ void GovernanceHook::log_debug(const std::string& message) {
 }
 
 InferenceHook::StreamingCheckResult GovernanceHook::check_streaming_content(const std::string& current_content) {
-    auto& registry = GovernanceRegistry::get_instance();
-    auto all_rules = registry.get_all_rules();
-    
     // Skip checking if the content is too short
     if (current_content.length() < min_streaming_check_length) {
         return StreamingCheckResult();
@@ -1322,17 +1293,91 @@ InferenceHook::StreamingCheckResult GovernanceHook::check_streaming_content(cons
     log_debug("GovernanceHook: Performing streaming check for content of length: " + 
               std::to_string(current_content.length()));
     
+    // Clear previous feedback from streaming checks to avoid duplication
+    // Only do this if we actually have feedback that's from streaming
+    bool had_streaming_feedback = false;
+    for (auto it = feedback_channel.begin(); it != feedback_channel.end();) {
+        if (it->severity == FeedbackSeverity::WARNING) {
+            it = feedback_channel.erase(it);
+            had_streaming_feedback = true;
+        } else {
+            ++it;
+        }
+    }
+    
+    auto& registry = GovernanceRegistry::get_instance();
+    auto all_rules = registry.get_all_rules();
+    
     // Check each rule's streaming check function
     for (const auto& rule : all_rules) {
         if (rule->streaming_check) {
             auto result = rule->streaming_check(current_content);
             if (result.has_value()) {
                 log_debug("Rule " + std::to_string(rule->id) + " streaming check detected an issue");
-                return StreamingCheckResult(result.value());
+                
+                auto [message, method] = result.value();
+                
+                // Process based on enforcement method
+                if (method == EnforcementMethod::DIRECT_ONLY) {
+                    // Only inject into stream
+                    return StreamingCheckResult(message);
+                }
+                else if (method == EnforcementMethod::FEEDBACK_ONLY) {
+                    // Only add to feedback
+                    add_feedback(rule->id, message, FeedbackSeverity::WARNING);
+                }
+                else if (method == EnforcementMethod::BOTH) {
+                    // Both inject and add to feedback
+                    add_feedback(rule->id, message, FeedbackSeverity::WARNING);
+                    return StreamingCheckResult(message);
+                }
+                // NONE would just log and continue
             }
         }
     }
     
     // No issues detected
     return StreamingCheckResult();
+}
+
+// Add to GovernanceHook class public methods
+void GovernanceHook::add_feedback(int rule_id, const std::string& message, FeedbackSeverity severity) {
+    // Only critical severity or Rule 1/28 violations are visible by default
+    bool visible = (severity == FeedbackSeverity::CRITICAL || 
+                   rule_id == 1 || rule_id == 28);
+    
+    feedback_channel.push_back({
+        rule_id, 
+        message, 
+        severity, 
+        visible,
+        std::chrono::system_clock::now()
+    });
+}
+
+std::string GovernanceHook::get_feedback() const {
+    std::stringstream ss;
+    
+    for (const auto& feedback : feedback_channel) {
+        if (feedback.visible_to_user || in_debug_mode || show_trace_requested) {
+            ss << "[Rule " << feedback.rule_id << "] " << feedback.message << "\n";
+        }
+    }
+    
+    return ss.str();
+}
+
+bool GovernanceHook::has_feedback() const {
+    if (in_debug_mode || show_trace_requested) {
+        return !feedback_channel.empty();
+    }
+    
+    // Check if there's any user-visible feedback
+    for (const auto& feedback : feedback_channel) {
+        if (feedback.visible_to_user) {
+            return true;
+        }
+    }
+    
+    return false;
 }

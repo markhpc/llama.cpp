@@ -83,3 +83,28 @@ InferenceHook::StreamingCheckResult InferenceHookComposite::check_streaming_cont
     // No issues detected by any hook
     return StreamingCheckResult();
 }
+
+std::string InferenceHookComposite::get_feedback() const {
+    std::stringstream combined;
+    
+    for (const auto &hook : hooks) {
+        std::string feedback = hook->get_feedback();
+        if (!feedback.empty()) {
+            if (combined.tellp() > 0) {
+                combined << "\n";
+            }
+            combined << feedback;
+        }
+    }
+    
+    return combined.str();
+}
+
+bool InferenceHookComposite::has_feedback() const {
+    for (const auto &hook : hooks) {
+        if (hook->has_feedback()) {
+            return true;
+        }
+    }
+    return false;
+}

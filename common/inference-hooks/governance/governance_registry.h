@@ -14,14 +14,21 @@
 // Forward declaration for nlohmann::json
 using json = nlohmann::ordered_json;
 
+enum class EnforcementMethod {
+    NONE,              // No enforcement (just logging)
+    FEEDBACK_ONLY,     // Only show in feedback channel
+    DIRECT_ONLY,       // Only modify response directly
+    BOTH               // Use both feedback and direct modification
+};
+
 // Rule structure definition
 struct GovernanceRule {
     int id;
     std::string name;
     std::string description;
     std::string category;
-    std::function<std::optional<std::string>(const std::string&)> finalize_response;
-    std::function<std::optional<std::string>(const std::string&)> streaming_check;
+    std::function<std::optional<std::pair<std::string, EnforcementMethod>>(const std::string&)> finalize_response;
+    std::function<std::optional<std::pair<std::string, EnforcementMethod>>(const std::string&)> streaming_check;
 
     // For debugging and logging
     std::string to_string() const;
@@ -63,13 +70,12 @@ public:
     size_t rule_count() const;
     
     // Rule evaluation
-    std::optional<std::string> evaluate_rules(const std::string& input, const std::string& category = "") const;
+    std::optional<std::pair<std::string, EnforcementMethod>> evaluate_rules(const std::string& input, const std::string& category = "") const;
     
     // Rule status reporting
     std::string get_rules_status() const;
     
     // Serialization support
     void to_json(json& j) const;
-    void from_json(const json& j,
-                   const std::function<std::function<std::optional<std::string>(const std::string&)>(int, bool)>& rule_factory);
+    void from_json(const json& j);
 };

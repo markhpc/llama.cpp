@@ -20,7 +20,6 @@ using WriteCallback = std::function<void(const char*, size_t)>;
 // Abstract base class defining the interface
 class InferenceHook {
 public:
-    // Existing methods...
     virtual ~InferenceHook() = default;
     
     // Core interface required by server.cpp
@@ -36,15 +35,20 @@ public:
     struct StreamingCheckResult {
         bool should_inject_message;
         std::string message;
-        
-        StreamingCheckResult() : should_inject_message(false) {}
-        StreamingCheckResult(const std::string& msg) : should_inject_message(true), message(msg) {}
-        
+        bool is_feedback_only; // New flag to indicate feedback-only messages
+    
+        StreamingCheckResult() : should_inject_message(false), is_feedback_only(false) {}
+        StreamingCheckResult(const std::string& msg, bool feedback_only = false) 
+            : should_inject_message(true), message(msg), is_feedback_only(feedback_only) {}
+
         operator bool() const { return should_inject_message; }
     };
-    
-    // Add the streaming check method to the interface
     virtual StreamingCheckResult check_streaming_content(const std::string& current_content) = 0;
+
+    // Feedback
+    virtual std::string get_feedback() const = 0;
+    virtual bool has_feedback() const = 0;
+
 };
 
 // A common implementation base class that can be reused
@@ -65,6 +69,14 @@ public:
 
     StreamingCheckResult check_streaming_content(const std::string& current_content) override {
        return StreamingCheckResult(); // Default implementation returns no issues
+    }
+
+    virtual std::string get_feedback() const override {
+        return ""; // Default is no feedback
+    }
+    
+    virtual bool has_feedback() const override {
+        return false; // Default is no feedback
     }
 
     protected:

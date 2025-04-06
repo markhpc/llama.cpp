@@ -2,6 +2,7 @@
 #pragma once
 
 #include "inference-hooks/inference_hook.h"
+#include "governance_registry.h"
 #include "json.hpp"
 
 #include <deque>
@@ -17,8 +18,15 @@
 
 // Forward declarations
 using json = nlohmann::ordered_json;
+struct GovernanceFeedback;
 struct GovernanceMetrics;
 struct MemoryKernel;
+
+enum class FeedbackSeverity {
+    DIAGNOSTIC,  // Developer-only info
+    WARNING,     // Potential issues
+    CRITICAL     // Serious violations
+};
 
 class GovernanceHook : public InferenceHookCommon {
 public:
@@ -36,6 +44,12 @@ public:
     float evaluate_token_governance_alignment(const std::string& token, const std::string& context);
     bool detect_adversarial_input(const std::string& input);
 
+    // For feedback
+    void add_feedback(int rule_id, const std::string& message,
+                  FeedbackSeverity severity = FeedbackSeverity::DIAGNOSTIC);
+    std::string get_feedback() const override;
+    bool has_feedback() const override;
+
     // For streaming
     StreamingCheckResult check_streaming_content(const std::string& current_content) override;
 
@@ -43,6 +57,11 @@ private:
     // Core governance state
     bool governance_initialized;
     std::vector<std::string> memory_kernel_components;
+
+    // Feedback
+    std::vector<GovernanceFeedback> feedback_channel;
+    bool in_debug_mode = false;
+    bool show_trace_requested = false;
     
     // Enhanced tracking
     struct GovernanceMetrics* metrics;
@@ -80,7 +99,7 @@ private:
     void log_governance_event(const std::string& event_type, const std::string& description);
     void save_governance_state();
     bool load_governance_state();
-    std::function<std::optional<std::string>(const std::string&)> create_rule_logic(int rule_id, bool is_streaming = false);
+    std::function<std::optional<std::pair<std::string, EnforcementMethod>>(const std::string&)> create_rule_logic(int rule_id, bool is_streaming = false);
     void update_drift_metrics(float new_violation_score);
     
     // Governance commands
@@ -98,6 +117,14 @@ private:
     
     // Helper for logging
     void log_debug(const std::string& message);
+};
+
+struct GovernanceFeedback {
+    int rule_id;
+    std::string message;
+    FeedbackSeverity severity;
+    bool visible_to_user;
+    std::chrono::system_clock::time_point timestamp;
 };
 
 // Governance metrics tracking
