@@ -18,6 +18,7 @@ public:
     void handle_json_command(json &j);
     std::string handle_text_command(const std::string& cmd);
     std::string finalize_response(const std::string& response_text) override;
+    StreamingCheckResult check_streaming_content(const std::string& current_content) override;
 
 private:
     std::vector<std::shared_ptr<InferenceHook>> hooks;

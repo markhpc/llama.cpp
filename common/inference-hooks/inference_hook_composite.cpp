@@ -66,3 +66,20 @@ std::string InferenceHookComposite::finalize_response(const std::string& respons
 
     return result;
 }
+
+InferenceHook::StreamingCheckResult InferenceHookComposite::check_streaming_content(const std::string& current_content) {
+    // Chain the checks through all hooks and return the first non-empty result
+    for (const auto &hook : hooks) {
+        // Try to cast to InferenceHookCommon to access the method
+        auto* common_hook = dynamic_cast<InferenceHookCommon*>(hook.get());
+        if (common_hook) {
+            StreamingCheckResult result = common_hook->check_streaming_content(current_content);
+            if (result) {
+                return result;
+            }
+        }
+    }
+    
+    // No issues detected by any hook
+    return StreamingCheckResult();
+}

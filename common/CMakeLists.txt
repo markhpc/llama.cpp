@@ -71,6 +71,8 @@ add_library(${TARGET} STATIC
     inference-hooks/governance/governance_hook.h
     inference-hooks/governance/governance_hook.cpp
     inference-hooks/governance/governance_hook_factory.cpp
+    inference-hooks/governance/governance_registry.h
+    inference-hooks/governance/governance_registry.cpp
     json-schema-to-grammar.cpp
     json.hpp
     llguidance.cpp

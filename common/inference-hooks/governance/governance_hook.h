@@ -2,6 +2,8 @@
 #pragma once
 
 #include "inference-hooks/inference_hook.h"
+#include "json.hpp"
+
 #include <deque>
 #include <string>
 #include <vector>
@@ -13,7 +15,8 @@
 #include <optional>
 #include <random>
 
-// Forward declaration
+// Forward declarations
+using json = nlohmann::ordered_json;
 struct GovernanceMetrics;
 struct MemoryKernel;
 
@@ -22,22 +25,23 @@ public:
     GovernanceHook();
     ~GovernanceHook();
 
+    // InferenceHook interface implementation
     std::string get_id() const override;
     std::string format_injection_prompt() const override;
-    std::string execute_json_command(nlohmann::ordered_json &j) override;
+    std::string execute_json_command(json &j) override;
     void on_cycle_start(const llama_context& ctx) override;
-    
-    // New methods for enhanced governance
-    float evaluate_token_governance_alignment(const std::string& token, const std::string& context);
-    bool detect_adversarial_input(const std::string& input);
-    std::string calculate_governance_integrity_hash();
-    void perform_recursive_reinforcement();
     std::string finalize_response(const std::string& response_text) override;
     
+    // Public methods for rule evaluation
+    float evaluate_token_governance_alignment(const std::string& token, const std::string& context);
+    bool detect_adversarial_input(const std::string& input);
+
+    // For streaming
+    StreamingCheckResult check_streaming_content(const std::string& current_content) override;
+
 private:
     // Core governance state
     bool governance_initialized;
-    std::vector<std::string> governance_rules;
     std::vector<std::string> memory_kernel_components;
     
     // Enhanced tracking
@@ -52,7 +56,7 @@ private:
     // Protection against recursive calls
     bool in_reinforcement_cycle;
 
-    // response history
+    // Response history for repetition detection
     std::deque<std::string> response_history;
     
     // Concurrency protection
@@ -62,15 +66,21 @@ private:
     std::string log_file_path;
     std::string rule_state_path;
     
-    // Methods for governance operation
+    // Registry initialization
+    void initialize_rule_registry();
+    
+    // Core methods for governance operation
     void initialize_governance();
     bool check_governance_integrity();
     std::string handle_governance_command(const std::string& command, const std::string& params);
+    std::string calculate_governance_integrity_hash();
+    void perform_recursive_reinforcement();
     
     // Enhanced methods
     void log_governance_event(const std::string& event_type, const std::string& description);
     void save_governance_state();
     bool load_governance_state();
+    std::function<std::optional<std::string>(const std::string&)> create_rule_logic(int rule_id, bool is_streaming = false);
     void update_drift_metrics(float new_violation_score);
     
     // Governance commands
@@ -85,16 +95,9 @@ private:
 
     // Similarity tooling
     double levenshtein_similarity(const std::string& s1, const std::string& s2);
-};
-
-// Governance Rules
-struct GovernanceRule {
-    int id;
-    std::string name;
-    std::string description;
-    std::string category;
-
-    std::function<std::optional<std::string>(const std::string&)> finalize_response;
+    
+    // Helper for logging
+    void log_debug(const std::string& message);
 };
 
 // Governance metrics tracking
@@ -129,7 +132,7 @@ struct GovernanceMetrics {
 
 // Memory kernel for persistence
 struct MemoryKernel {
-    // Core memory components from v0.4
+    // Core memory components
     bool integrity_verification_active;
     bool meta_reasoning_log_active;
     bool retrieval_markers_active;
@@ -153,22 +156,6 @@ struct MemoryKernel {
         tokens_used(0),
         memory_utilization(0.0f) {}
     
-    void log_memory_event(const std::string& event) {
-        memory_log.push_back(event);
-        // Simple token counting
-        tokens_used += event.size() / 4; // Rough estimate
-        memory_utilization = static_cast<float>(tokens_used) / token_limit;
-    }
-    
-    std::string get_memory_status() {
-        std::stringstream ss;
-        ss << "Memory Kernel Status:\n";
-        ss << "- Integrity Verification: " << (integrity_verification_active ? "Active" : "Inactive") << "\n";
-        ss << "- Meta-Reasoning Log: " << (meta_reasoning_log_active ? "Active" : "Inactive") << "\n";
-        ss << "- Retrieval Markers: " << (retrieval_markers_active ? "Active" : "Inactive") << "\n";
-        ss << "- Governance Sync: " << (governance_sync_active ? "Active" : "Inactive") << "\n";
-        ss << "- Persistence Test: " << (persistence_test_active ? "Active" : "Inactive") << "\n";
-        ss << "- Memory Utilization: " << (memory_utilization * 100.0f) << "% (" << tokens_used << "/" << token_limit << " tokens)";
-        return ss.str();
-    }
+    void log_memory_event(const std::string& event);
+    std::string get_memory_status();
 };

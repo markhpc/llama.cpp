@@ -20,8 +20,9 @@ using WriteCallback = std::function<void(const char*, size_t)>;
 // Abstract base class defining the interface
 class InferenceHook {
 public:
+    // Existing methods...
     virtual ~InferenceHook() = default;
-
+    
     // Core interface required by server.cpp
     virtual std::string get_id() const = 0;
     virtual void process_response(json& response, bool is_final, const WriteCallback& write_callback) = 0;
@@ -30,6 +31,20 @@ public:
     virtual std::string format_injection_prompt() const = 0;
     virtual void on_cycle_start(const llama_context& ctx) = 0; 
     virtual std::string finalize_response(const std::string& response_text) = 0;
+    
+    // New streaming interface
+    struct StreamingCheckResult {
+        bool should_inject_message;
+        std::string message;
+        
+        StreamingCheckResult() : should_inject_message(false) {}
+        StreamingCheckResult(const std::string& msg) : should_inject_message(true), message(msg) {}
+        
+        operator bool() const { return should_inject_message; }
+    };
+    
+    // Add the streaming check method to the interface
+    virtual StreamingCheckResult check_streaming_content(const std::string& current_content) = 0;
 };
 
 // A common implementation base class that can be reused
@@ -48,8 +63,16 @@ public:
         return response_text;
     }
 
+    StreamingCheckResult check_streaming_content(const std::string& current_content) override {
+       return StreamingCheckResult(); // Default implementation returns no issues
+    }
 
-protected:
+    protected:
+    // Thresholds for streaming content checks
+    bool streaming_checks_enabled = true;
+    size_t min_streaming_check_length = 50;  // Only check once we have enough content
+    size_t streaming_check_interval = 30;     // Check every N tokens/chunks
+    size_t streaming_check_counter = 0;      // Counter for tracking when to check
     bool in_streaming_mode = false;
 
     // Context Management
