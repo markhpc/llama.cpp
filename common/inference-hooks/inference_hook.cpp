@@ -10,7 +10,7 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
         // Process the chunk normally
         process_streaming_chunk(response);
         
-        // On final chunk, check if we need to execute hook commands and add feedback
+        // On final chunk, check if we need to execute hook commands
         if (is_final) {
             // Allow derived classes to modify the output
             std::string original_content = accumulated_content;
@@ -22,15 +22,13 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
             // Extract hook commands from the accumulated content
             std::regex json_pattern(R"(\{[^{}]*"hook_command"[^{}]*\})");
             std::smatch match;
-            bool hook_command_executed = false;
-            
             if (std::regex_search(accumulated_content, match, json_pattern)) {
                 std::string json_str = match.str();
                 // Execute the hook command
                 std::string hook_response = handle_text_command(json_str);
                 if (!hook_response.empty()) {
                     // Create a JSON response with the hook results
-                    nlohmann::ordered_json hook_chunk = {
+                    json hook_chunk = {
                         {"id", "hook_response"},
                         {"object", "chat.completion.chunk"},
                         {"created", static_cast<int>(time(nullptr))},
@@ -44,13 +42,15 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
                     // Format and send the response
                     std::string chunk_str = "data: " + hook_chunk.dump() + "\n\n";
                     write_callback(chunk_str.c_str(), chunk_str.size());
-                    hook_command_executed = true;
                 }
             } 
             // Only send modified content if it was actually modified by the governance hook
             else if (content_was_modified) {
+                accumulated_content.clear();  // Prevent prior tokens from being sent again
+                accumulated_content = finalize_response(original_content);
+
                 // Send the difference between original and modified content
-                nlohmann::json modified_chunk = {
+                json modified_chunk = {
                     {"choices", {{
                         {"delta", {
                             {"content", accumulated_content}
@@ -59,29 +59,6 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
                 };
                 std::string chunk_str = "data: " + modified_chunk.dump() + "\n\n";
                 write_callback(chunk_str.c_str(), chunk_str.size());
-            }
-            
-            // Check for feedback after processing the hook command and content modification
-            if (has_feedback()) {
-                std::string feedback = get_feedback();
-                if (!feedback.empty()) {
-                    // Create a special feedback chunk
-                    nlohmann::ordered_json feedback_chunk = {
-                        {"id", "governance_feedback"},
-                        {"object", "chat.completion.chunk"},
-                        {"created", static_cast<int>(time(nullptr))},
-                        {"model", "governance_system"},
-                        {"choices", {{
-                            {"index", 0},
-                            {"delta", {{"content", "\n\n" + feedback}}},
-                            {"finish_reason", nullptr}
-                        }}}
-                    };
-                    
-                    // Format and send the feedback
-                    std::string chunk_str = "data: " + feedback_chunk.dump() + "\n\n";
-                    write_callback(chunk_str.c_str(), chunk_str.size());
-                }
             }
             
             // Always signal the end of the stream
@@ -94,41 +71,6 @@ void InferenceHookCommon::process_response(json& response, bool is_final, const 
     } else {
         // For non-streaming responses, process directly
         process_regular_response(response);
-        
-        // Check for feedback after processing the response
-        if (has_feedback()) {
-            std::string feedback = get_feedback();
-            
-            // For non-streaming responses, we need to append the feedback to the response
-            if (!feedback.empty()) {
-                // Determine where to insert the feedback based on response structure
-                if (response.contains("choices") && response["choices"].is_array() && 
-                    !response["choices"].empty()) {
-                    
-                    auto& first_choice = response["choices"][0];
-                    if (first_choice.contains("message") && first_choice["message"].contains("content")) {
-                        // For OpenAI-style responses
-                        std::string current_content = first_choice["message"]["content"];
-                        first_choice["message"]["content"] = current_content + "\n\n" + feedback;
-                    } else if (first_choice.contains("text")) {
-                        // For some API formats
-                        std::string current_content = first_choice["text"];
-                        first_choice["text"] = current_content + "\n\n" + feedback;
-                    }
-                } else if (response.contains("content")) {
-                    // Direct content field
-                    std::string current_content = response["content"];
-                    response["content"] = current_content + "\n\n" + feedback;
-                } else if (response.contains("text")) {
-                    // Legacy format
-                    std::string current_content = response["text"];
-                    response["text"] = current_content + "\n\n" + feedback;
-                }
-                
-                // Log that feedback was added
-                log_debug("Added governance feedback to non-streaming response");
-            }
-        }
     }
 }
 
@@ -305,16 +247,14 @@ void InferenceHookCommon::handle_json_command(json& j) {
 
 void InferenceHookCommon::process_streaming_chunk(json& j) {
     try {
-        // Extract content from the chunk
-        std::string content;
-        bool content_found = false;
-        
         // First check if it's a direct object with choices
         if (j.contains("choices") && j["choices"].is_array() && !j["choices"].empty()) {
             const auto& first_choice = j["choices"][0];
             if (first_choice.contains("delta") && first_choice["delta"].contains("content")) {
-                content = first_choice["delta"]["content"].get<std::string>();
-                content_found = true;
+                std::string content = first_choice["delta"]["content"].get<std::string>();
+                accumulated_content += content;
+                log_debug("Chunk appended: '" + content + "'");
+                return;
             }
         }
         // Then check the array case
@@ -323,53 +263,12 @@ void InferenceHookCommon::process_streaming_chunk(json& j) {
             if (choices.is_array() && !choices.empty()) {
                 const auto& delta = choices[0]["delta"];
                 if (delta.contains("content")) {
-                    content = delta["content"].get<std::string>();
-                    content_found = true;
+                    std::string content = delta["content"].get<std::string>();
+                    accumulated_content += content;
+                    log_debug("Chunk appended: '" + content + "'");
+                    return;
                 }
             }
-        }
-        
-        // Process the content if found
-        if (content_found) {
-            // Append to accumulated content
-            accumulated_content += content;
-            log_debug("Chunk appended: '" + content + "'");
-            
-            // Perform streaming content checks
-            if (streaming_checks_enabled && 
-                accumulated_content.length() >= min_streaming_check_length) {
-                
-                streaming_check_counter++;
-                
-                // Only check periodically to avoid too much overhead
-                if (streaming_check_counter >= streaming_check_interval) {
-                    streaming_check_counter = 0;
-                    
-                    // Call the virtual method that derived classes can implement
-                    StreamingCheckResult check_result = check_streaming_content(accumulated_content);
-                    
-                    // If the check returned a message to inject
-                    if (check_result) {
-                        log_debug("Streaming check detected issue: " + check_result.message);
-                        
-                        // Inject the message into the current chunk
-                        std::string warning_msg = "\n\n[" + check_result.message + "]\n\n";
-                        
-                        // Update the chunk that will be sent to the client
-                        if (j.contains("choices")) {
-                            j["choices"][0]["delta"]["content"] = warning_msg;
-                        }
-                        else if (j.is_array() && !j.empty()) {
-                            j[0]["choices"][0]["delta"]["content"] = warning_msg;
-                        }
-                        
-                        // Also update our accumulated content with the warning
-                        accumulated_content += warning_msg;
-                    }
-                }
-            }
-            
-            return;
         }
         
         log_debug("Chunk missing 'content' field: " + j.dump());
@@ -454,10 +353,9 @@ void InferenceHookCommon::process_regular_response(json& j) {
 
 void InferenceHookCommon::reset_streaming() {
     log_debug("reset_streaming: Resetting streaming state");
-    in_streaming_mode = false;
     accumulated_content.clear();
 }
 
-std::string InferenceHookCommon::execute_json_command(nlohmann::ordered_json &j) {
+std::string InferenceHookCommon::execute_json_command(json &j) {
     return "InferenceHookCommon";
 }

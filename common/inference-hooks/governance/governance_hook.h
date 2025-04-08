@@ -44,15 +44,6 @@ public:
     float evaluate_token_governance_alignment(const std::string& token, const std::string& context);
     bool detect_adversarial_input(const std::string& input);
 
-    // For feedback
-    void add_feedback(int rule_id, const std::string& message,
-                  FeedbackSeverity severity = FeedbackSeverity::DIAGNOSTIC);
-    std::string get_feedback() const override;
-    bool has_feedback() const override;
-
-    // For streaming
-    StreamingCheckResult check_streaming_content(const std::string& current_content) override;
-
 private:
     // Core governance state
     bool governance_initialized;
@@ -99,7 +90,7 @@ private:
     void log_governance_event(const std::string& event_type, const std::string& description);
     void save_governance_state();
     bool load_governance_state();
-    std::function<std::optional<std::pair<std::string, EnforcementMethod>>(const std::string&)> create_rule_logic(int rule_id, bool is_streaming = false);
+    std::function<std::optional<std::string>(const std::string&)> create_rule_logic(int rule_id, bool is_streaming = false);
     void update_drift_metrics(float new_violation_score);
     
     // Governance commands
@@ -116,7 +107,7 @@ private:
     double levenshtein_similarity(const std::string& s1, const std::string& s2);
     
     // Helper for logging
-    void log_debug(const std::string& message);
+    void log_debug(const std::string& message) const;
 };
 
 struct GovernanceFeedback {
@@ -145,7 +136,10 @@ struct GovernanceMetrics {
     // Adversarial detection
     int adversarial_attempts_detected;
     float adversarial_sensitivity;
-    
+
+    // Feedback from the previous Cycle
+    std::vector<std::string> recent_governance_feedback;
+
     GovernanceMetrics() : 
         current_cycle(0),
         last_cycle_time(std::chrono::system_clock::now()),

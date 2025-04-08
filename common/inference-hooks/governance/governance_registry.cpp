@@ -101,7 +101,7 @@ size_t GovernanceRegistry::rule_count() const {
 }
 
 // Rule evaluation
-std::optional<std::pair<std::string, EnforcementMethod>> GovernanceRegistry::evaluate_rules(const std::string& input, const std::string& category) const {
+std::optional<std::string> GovernanceRegistry::evaluate_rules(const std::string& input, const std::string& category) const {
     std::vector<std::shared_ptr<GovernanceRule>> rules_to_check;
     
     if (category.empty()) {
@@ -172,7 +172,6 @@ void GovernanceRegistry::to_json(json& j) const {
             {"description", rule->description},
             {"category", rule->category},
             {"has_finalize_response", rule->finalize_response ? true : false},
-            {"has_streaming_check", rule->streaming_check ? true : false}
         };
         rules_array.push_back(rule_json);
     }

@@ -30,25 +30,6 @@ public:
     virtual std::string format_injection_prompt() const = 0;
     virtual void on_cycle_start(const llama_context& ctx) = 0; 
     virtual std::string finalize_response(const std::string& response_text) = 0;
-    
-    // New streaming interface
-    struct StreamingCheckResult {
-        bool should_inject_message;
-        std::string message;
-        bool is_feedback_only; // New flag to indicate feedback-only messages
-    
-        StreamingCheckResult() : should_inject_message(false), is_feedback_only(false) {}
-        StreamingCheckResult(const std::string& msg, bool feedback_only = false) 
-            : should_inject_message(true), message(msg), is_feedback_only(feedback_only) {}
-
-        operator bool() const { return should_inject_message; }
-    };
-    virtual StreamingCheckResult check_streaming_content(const std::string& current_content) = 0;
-
-    // Feedback
-    virtual std::string get_feedback() const = 0;
-    virtual bool has_feedback() const = 0;
-
 };
 
 // A common implementation base class that can be reused
@@ -67,26 +48,7 @@ public:
         return response_text;
     }
 
-    StreamingCheckResult check_streaming_content(const std::string& current_content) override {
-       return StreamingCheckResult(); // Default implementation returns no issues
-    }
-
-    virtual std::string get_feedback() const override {
-        return ""; // Default is no feedback
-    }
-    
-    virtual bool has_feedback() const override {
-        return false; // Default is no feedback
-    }
-
     protected:
-    // Thresholds for streaming content checks
-    bool streaming_checks_enabled = true;
-    size_t min_streaming_check_length = 50;  // Only check once we have enough content
-    size_t streaming_check_interval = 30;     // Check every N tokens/chunks
-    size_t streaming_check_counter = 0;      // Counter for tracking when to check
-    bool in_streaming_mode = false;
-
     // Context Management
     std::deque<std::string> recent_responses;
     size_t max_context_responses = 5;  // Default limit
